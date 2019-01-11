@@ -48,7 +48,7 @@
 /* MySQL related defines */
 #define HOST	"localhost"
 #define USER	"addressuser"
-#define PASS	"unuttum"
+#define PASS	""
 #define DB	"nz_address"
 
 #define NAMVALLEN 2
