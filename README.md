@@ -8,13 +8,12 @@ You need to have MySQL development files (`mysql.h` and `libmysqlclient`) instal
 
 `clang server.c -L/usr/local/lib/mysql -I/usr/local/include/mysql -o server -Wall -lmysqlclient -O2`
 
-The code is tested on a FreeBSD host machine but you should be able to compile and run on any POSIX system.
+The code has been tested on a FreeBSD host machine but you should be able to compile and run on any UNIX like system.
 
 # How it works
-After compiling the source file, you just need to run theresulting executable file. 
-The daemon process will start to listen the TCP port you specified.
-The server will be listening for incoming HTTP GET requests. 
-Once a request is received, appropriate SQL querys is constructed from the name-value pairs contained in the HTTP GET request and sent to the MySQL server.
+After compiling the source file, you just need to run the resulting executable file from th command line.
+The daemon process will start to listen the TCP port you specified for incoming HTTP GET requests.
+Once a request is received, an appropriate SQL querys is constructed from the name-value pairs contained in the HTTP GET request and sent to the MySQL server.
 The result is then sent back to the client in JSON format.
 
 # License
