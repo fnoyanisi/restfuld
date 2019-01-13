@@ -45,24 +45,10 @@
 #define QLEN	10
 #define BUFLEN	256
 
-/* MySQL related defines */
-#define HOST	"localhost"
-#define USER	"addressuser"
-#define PASS	""
-#define DB	"nz_address"
+#include "dbcred.h"
+#include "restfuld.h"
 
 #define NAMVALLEN 2
-
-/* 
- * A struct representing a name-value pair of a
- * HTTP GET request.
- * Only single character name fields are allowed.
- */
-#define VALLEN  32
-struct http_get_req {
-        char name;
-        char value[VALLEN];
-};
 
 /*
  * Executes an SQL statement and sends each result row to the client
