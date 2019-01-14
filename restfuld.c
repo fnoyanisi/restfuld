@@ -24,14 +24,15 @@
 */
 
 /* Standard header files */
+#include <err.h>
+#include <errno.h>
+#include <libgen.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
-#include <err.h>
+#include <unistd.h>
 
 /* socket related stuff */
-#include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -160,6 +161,18 @@ send_http_headers(int client)
 }
 
 /*
+ * Prints the usage and exits
+ */
+void
+usage(void)
+{
+	fprintf(stdout,"usage: restfuld [-D database] [-H host] " 
+			"[-l logfile] [-p portno] [-P password] "
+			"[-T table]\n"); 
+	exit(1);
+}
+
+/*
  * Simple daemon that implements a RESTful API
  * for MySQL server.
  */
@@ -168,10 +181,41 @@ main(int argc, char **argv)
 {
 	pid_t pid;
 	int fd, newfd, port, recv_bytes, i;
+	int ch, Dflag, Hflag, lflag, pflag, Pflag, Tflag;
 	char buf[BUFLEN];
 	socklen_t addr_len;
 	struct sockaddr_in srv_addr, cli_addr;
 	struct http_get_req namval[NAMVALLEN];
+
+	Dflag = Hflag = lflag = pflag = Pflag = Tflag = 0;
+	while ((ch = getopt(argc, argv, "D:H:l:p:P:T:")) != -1) {
+		switch(ch) {
+			case 'D':
+				Dflag = 1;
+				break;
+			case 'H':
+				Hflag = 1;
+				break;
+			case 'l':
+				lflag = 1;
+				break;
+			case 'p':
+				pflag = 1;
+				break;
+			case 'P':
+				Pflag = 1;
+				break;
+			case 'T':
+				Tflag = 1;
+				break;
+			case '?':
+			default:
+				usage();	
+
+		}
+	}
+	argc -= optind;
+	argv += optind;
 
 	/* assign the port the server is listening on */
 	port = PORTNO;
@@ -255,3 +299,5 @@ main(int argc, char **argv)
 		err(1, (char *)NULL);
 	return 0;
 }
+
+
