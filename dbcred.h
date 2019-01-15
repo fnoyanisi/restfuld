@@ -26,12 +26,28 @@
 #ifndef _DBCRED_H
 #define _DBCRED_H
 
+/* Buffer length limits */
+#define DBHOST_LEN	256
+#define DBUSER_LEN	32
+#define DBPASS_LEN	32 
+#define DBNAME_LEN	64
+#define DBTABLE_LEN	64
+
 /* 
  * Enter your MySQL database login credentials here.
  */
-#define HOST	"localhost"
-#define USER	"addressuser"
-#define PASS	""
-#define DB	"nz_address"
+#define DBHOST		""
+#define DBUSER		""
+#define DBPASS		""
+#define DBNAME		""
+#define DBTABLE		""
+
+struct mysql_db_cred {
+	char hostname[DBHOST_LEN];
+	char username[DBUSER_LEN];
+	char password[DBPASS_LEN];
+	char database[DBNAME_LEN];
+	char table[DBTABLE_LEN];
+};
 
 #endif

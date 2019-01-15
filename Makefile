@@ -21,7 +21,7 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-CFLAGS 	= -I/usr/local/include/mysql -O3
+CFLAGS 	= -I/usr/local/include/mysql -Wall -O3
 LDFLAGS	= -L/usr/local/lib/mysql -lmysqlclient
 
 PROG	= restfuld
