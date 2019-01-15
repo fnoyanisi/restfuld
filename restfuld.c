@@ -204,6 +204,8 @@ main(int argc, char **argv)
 	(void)strlcpy(cred.username, DBNAME, DBNAME_LEN);
 	(void)strlcpy(cred.table, DBTABLE, DBTABLE_LEN);
 
+	(void)strlcpy(logpath, "./restfuld.log", PATH_MAX);
+
 	/* User supplied command line options */
 	Dflag = Hflag = lflag = pflag = Pflag = Tflag = Uflag = 0;
 	while ((ch = getopt(argc, argv, "D:H:l:p:P:T:U:")) != -1) {
