@@ -30,10 +30,10 @@
  * HTTP GET request.
  * Only single character name fields are allowed.
  */
-#define VALLEN  32
+#define VALBUFLEN  32
 struct http_get_req {
         char name;
-        char value[VALLEN];
+        char value[VALBUFLEN];
 };
 
 #endif

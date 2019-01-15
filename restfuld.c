@@ -24,14 +24,16 @@
 */
 
 /* Standard header files */
+#include <err.h>
+#include <errno.h>
+#include <libgen.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
-#include <err.h>
+#include <unistd.h>
 
 /* socket related stuff */
-#include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -41,7 +43,7 @@
 #include <mysql.h>
 
 /* socket related defines */
-#define PORTNO	12345
+#define PORTNO	21210	
 #define QLEN	10
 #define BUFLEN	256
 
@@ -55,8 +57,8 @@
  * in JSON format. 
  */
 void
-execute_sql(char *q, int sock, ssize_t (*p_func) (int, const void *, 
-    size_t, int))
+execute_sql(char *q, int sock, const struct mysql_db_cred *cred,  
+    ssize_t (*p_func) (int, const void *, size_t, int))
 {
 	MYSQL_RES *result;
 	MYSQL_ROW row;
@@ -68,7 +70,10 @@ execute_sql(char *q, int sock, ssize_t (*p_func) (int, const void *,
 	if (mysql_init(&mysql) == NULL)
 		err(1, "Insufficient memory to initialize MySQL connection");
 
-	if ((conn = mysql_real_connect(&mysql, HOST, USER, PASS, DB, 
+	if ((conn = mysql_real_connect(&mysql, cred->hostname, 
+					       cred->username, 
+					       cred->password, 
+					       cred->database,  
 	    0, 0, 0)) == NULL)
 		err(1, "%s", mysql_error(&mysql));
 
@@ -132,7 +137,7 @@ get_http_values(const char *buf, struct http_get_req *r, int len)
 
         while (((p = strtok(p, "&")) != NULL) && (len-- > 0)){
                 r->name = *p;
-                strlcpy(r->value, strchr(p, '=')+1, VALLEN);
+                strlcpy(r->value, strchr(p, '=')+1, VALBUFLEN);
                 r++;
                 p = NULL;
         }
@@ -160,6 +165,18 @@ send_http_headers(int client)
 }
 
 /*
+ * Prints the usage and exits
+ */
+void
+usage(void)
+{
+	fprintf(stderr ,"usage: restfuld [-D database] [-H host] " 
+			"[-l logfile] [-p portno] [-P password] "
+			"[-T table] [-U user]\n"); 
+	exit(1);
+}
+
+/*
  * Simple daemon that implements a RESTful API
  * for MySQL server.
  */
@@ -168,13 +185,74 @@ main(int argc, char **argv)
 {
 	pid_t pid;
 	int fd, newfd, port, recv_bytes, i;
-	char buf[BUFLEN];
+	int ch, Dflag, Hflag, lflag, pflag, Pflag, Tflag, Uflag;
+	char buf[BUFLEN], logpath[PATH_MAX];
 	socklen_t addr_len;
 	struct sockaddr_in srv_addr, cli_addr;
+	struct mysql_db_cred cred;
 	struct http_get_req namval[NAMVALLEN];
 
-	/* assign the port the server is listening on */
+	/* 
+	 * set defaults. These values will be used unless user enter 
+	 * another from the command line
+	 */
 	port = PORTNO;
+
+	(void)strlcpy(cred.hostname, DBHOST, DBHOST_LEN);
+	(void)strlcpy(cred.username, DBUSER, DBUSER_LEN);
+	(void)strlcpy(cred.password, DBPASS, DBPASS_LEN);
+	(void)strlcpy(cred.username, DBNAME, DBNAME_LEN);
+	(void)strlcpy(cred.table, DBTABLE, DBTABLE_LEN);
+
+	(void)strlcpy(logpath, "./restfuld.log", PATH_MAX);
+
+	/* User supplied command line options */
+	Dflag = Hflag = lflag = pflag = Pflag = Tflag = Uflag = 0;
+	while ((ch = getopt(argc, argv, "D:H:l:p:P:T:U:")) != -1) {
+		switch(ch) {
+			case 'D':
+				Dflag = 1;
+				strlcpy(cred.database, optarg, DBNAME_LEN);
+				break;
+			case 'H':
+				Hflag = 1;
+				strlcpy(cred.hostname, optarg, DBHOST_LEN);
+				break;
+			case 'l':
+				lflag = 1;
+				if (access(dirname(optarg), W_OK) != 0)
+					err(1, (char *)NULL);
+				strlcpy(logpath, optarg, PATH_MAX);
+				break;
+			case 'p':
+				pflag = 1;
+				if ((port = (int)strtol(optarg, NULL, 10)) 
+				    == 0){
+					fprintf(stderr, "restfuld: "
+						"Invalid port number\n");
+					exit(1);
+				}
+				break;
+			case 'P':
+				Pflag = 1;
+				strlcpy(cred.password, optarg, DBPASS_LEN);
+				break;
+			case 'T':
+				Tflag = 1;
+				strlcpy(cred.table, optarg, DBTABLE_LEN);
+				break;
+			case 'U':
+				Uflag = 1;
+				strlcpy(cred.username, optarg, DBUSER_LEN);
+				break;
+			case '?':
+			default:
+				usage();	
+
+		}
+	}
+	argc -= optind;
+	argv += optind;
 
 	/* create a socket */
 	if ((fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
@@ -230,7 +308,7 @@ main(int argc, char **argv)
 				for (i=0; i< NAMVALLEN; i++) {
 					if (namval[i].name == 'q') {
 						execute_sql(namval[i].value, 
-						    newfd, send);
+						    newfd, &cred, send);
 					}
 				}
 			}
@@ -255,3 +333,5 @@ main(int argc, char **argv)
 		err(1, (char *)NULL);
 	return 0;
 }
+
+
