@@ -185,8 +185,8 @@ main(int argc, char **argv)
 {
 	pid_t pid;
 	int fd, newfd, port, recv_bytes, i;
-	int ch, Dflag, Hflag, lflag, pflag, Pflag, Tflag, Uflag;
-	char buf[BUFLEN], logpath[PATH_MAX];
+	int ch, cflag, Dflag, Hflag, lflag, pflag, Pflag, Tflag, Uflag;
+	char buf[BUFLEN], logpath[PATH_MAX], cfgpath[PATH_MAX];
 	socklen_t addr_len;
 	struct sockaddr_in srv_addr, cli_addr;
 	struct mysql_db_cred cred;
@@ -205,11 +205,18 @@ main(int argc, char **argv)
 	(void)strlcpy(cred.table, DBTABLE, DBTABLE_LEN);
 
 	(void)strlcpy(logpath, "./restfuld.log", PATH_MAX);
+	
+	(void)strlcpy(cfgpath, "./restfuld.conf", PATH_MAX);
 
 	/* User supplied command line options */
-	Dflag = Hflag = lflag = pflag = Pflag = Tflag = Uflag = 0;
-	while ((ch = getopt(argc, argv, "D:H:l:p:P:T:U:")) != -1) {
+	cflag = Dflag = Hflag = lflag = pflag = Pflag = Tflag = Uflag = 0;
+	while ((ch = getopt(argc, argv, "c:D:H:l:p:P:T:U:")) != -1) {
 		switch(ch) {
+			case 'c':
+				cflag = 1;
+				if (access(dirname(optarg), W_OK) != 0)
+					err(1, (char *)NULL);
+				strlcpy(cfgpath, optarg, PATH_MAX);
 			case 'D':
 				Dflag = 1;
 				strlcpy(cred.database, optarg, DBNAME_LEN);
