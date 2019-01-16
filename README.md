@@ -6,7 +6,7 @@ The code has been uploaded on to GitHub to make it publicly availabe but more wo
 Please see the [open issues in GitHub repository] and feel free to create new [Pull Requests].
 
 # Installation
-You need to have MySQL client development files (`mysql.h` and `libmysqlclient`) installed on your system. Please check with your operating system's package manager whether these files are installed by default with the MySQL client software.
+You need to have MySQL client development files (`mysql.h` and `libmysqlclient`) installed on your system. Please check with your operating system's package manager whether these files are installed along with the MySQL client software by default.
 
 To compile `restfuld`, simply type `make` inside the main directory. Use `make clean` to remove resulting object files and executables.
 
