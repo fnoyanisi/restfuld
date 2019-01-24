@@ -22,7 +22,7 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 CFLAGS 	= -I/usr/local/include/mysql -Wall -O3
-LDFLAGS	= -L/usr/local/lib/mysql -lmysqlclient
+LDFLAGS	= -L/usr/local/lib/mysql -lmysqlclient -lpthread
 
 PROG	= restfuld
 DEFS	= restfuld.h dbcred.h

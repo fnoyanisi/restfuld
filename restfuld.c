@@ -26,16 +26,22 @@
 /* Standard header files */
 #include <err.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <libgen.h>
 #include <limits.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 #include <unistd.h>
 
 /* socket related stuff */
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -52,6 +58,11 @@
 
 #define NAMVALLEN 2
 
+struct thread_data {
+	int fd;
+	struct mysql_db_cred dbcred;
+};
+
 /*
  * Executes an SQL statement and sends each result row to the client
  * in JSON format. 
@@ -66,7 +77,6 @@ execute_sql(char *q, int sock, const struct mysql_db_cred *cred,
 	int state, numrows;
 	char sql[256], buf[256];
 
-	/* connect to the MySQL database at localhost */
 	if (mysql_init(&mysql) == NULL)
 		err(1, "Insufficient memory to initialize MySQL connection");
 
@@ -176,6 +186,48 @@ usage(void)
 	exit(1);
 }
 
+void *
+worker(void *p)
+{
+	char buf[BUFLEN];
+	int i, fd, recv_bytes;
+	struct http_get_req namval[NAMVALLEN];
+	struct mysql_db_cred cred;
+	struct thread_data *d;
+
+	d = (struct thread_data *)p;
+	fd = d->fd;
+	cred = d->dbcred;
+
+	/* clear the receive buffer */
+	memset(buf, 0, BUFLEN);
+
+	/* read the client request */
+	if ((recv_bytes = read(fd, buf, BUFLEN - 1)) < 0) {
+		syslog(LOG_ERR, "read: %m");
+		return NULL;
+	}
+
+	/* send data to the client */
+	send_http_headers(fd);
+	if(get_http_values(buf, namval, NAMVALLEN) == 0){
+		for (i=0; i < NAMVALLEN; i++) {
+			if (namval[i].name == 'q') {
+				execute_sql(namval[i].value, 
+				    fd, &cred, send);
+			}
+		}
+	}
+
+	if (shutdown(fd, SHUT_RDWR) < 0)
+		err(1, (char *)NULL);
+
+	if (close(fd) < 0)
+		err(1, (char *)NULL);
+
+	return NULL;
+}
+
 /*
  * Simple daemon that implements a RESTful API
  * for MySQL server.
@@ -184,18 +236,19 @@ int
 main(int argc, char **argv)
 {
 	pid_t pid;
-	int fd, newfd, port, recv_bytes, i;
+	pthread_t t_id;
+	int fd, sock, newsock, port;
 	int ch, cflag, Dflag, Hflag, lflag, pflag, Pflag, Tflag, Uflag;
-	char buf[BUFLEN], logpath[PATH_MAX], cfgpath[PATH_MAX];
+	char logpath[PATH_MAX], cfgpath[PATH_MAX], pidbuf[32];
 	socklen_t addr_len;
 	struct sockaddr_in srv_addr, cli_addr;
+	struct thread_data d;
 	struct mysql_db_cred cred;
-	struct http_get_req namval[NAMVALLEN];
+	struct sigaction sa;
 
-	/* 
-	 * set defaults. These values will be used unless user enter 
-	 * another from the command line
-	 */
+	(void)openlog("restfuld", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_DAEMON);
+
+	/* set the defaults */
 	port = PORTNO;
 
 	(void)strlcpy(cred.hostname, DBHOST, DBHOST_LEN);
@@ -208,7 +261,6 @@ main(int argc, char **argv)
 	
 	(void)strlcpy(cfgpath, "./restfuld.conf", PATH_MAX);
 
-	/* User supplied command line options */
 	cflag = Dflag = Hflag = lflag = pflag = Pflag = Tflag = Uflag = 0;
 	while ((ch = getopt(argc, argv, "c:D:H:l:p:P:T:U:")) != -1) {
 		switch(ch) {
@@ -261,84 +313,140 @@ main(int argc, char **argv)
 	argc -= optind;
 	argv += optind;
 
-	/* create a socket */
-	if ((fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-		err(1,(char *)NULL);
+	/* daemonize */
+	pid = fork();
+	if (pid < 0) {
+		/* error */
+		syslog(LOG_ERR, "fork: %m");
+		fprintf(stderr,"restfuld: Cannot create background process.\n");
+		exit(1);
+	}
 
-	/* clear the address struct */
+	/* parent */
+	if (pid > 0) {	
+		exit(0);
+	}
+
+	/* child */
+	if (setsid() < 0) {
+		syslog(LOG_ERR, "setsid: %m");
+		exit(1);
+	}
+
+	/* 
+	 * close all open file descriptors and connect stdin, 
+	 * stdout and stderr to /dev/null
+	 */
+	for (fd = 0; fd < getdtablesize(); fd++)
+		(void)close(fd);
+
+	if ((fd = open("/dev/null", O_RDWR)) < 0) {
+		syslog(LOG_ERR, "open /dev/null : %m");
+		exit(1);
+	}
+
+	dup2(fd, STDIN_FILENO);
+	dup2(fd, STDOUT_FILENO);
+	dup2(fd, STDERR_FILENO);
+
+	/* clear the file creation mask */
+	umask(0);
+
+	/* change the running directory for the daemon */
+	if (chdir("/") < 0) {
+		syslog(LOG_ERR, "chdir: %m");
+		exit(1);
+	}
+
+	/* 
+	 * Make sure only one instance of restfuld is running
+	 * at any time.
+	 * Use of /var/run may be operating system dependent.
+	 * In FreeBSD, see hier(7) manual page for details
+	 */
+	if ((fd = open("/var/run/restfuld.pid", O_RDWR | O_CREAT, 0133)) < 0) {
+		syslog(LOG_ERR, "open /var/run/restfuld.pid : %m");
+		exit(1);
+	}
+
+	if (lockf(fd, F_TLOCK, 0) < 0) {
+		syslog(LOG_ERR, "flock: %m");
+		exit(1);
+	}
+
+	memset(pidbuf, 0, sizeof(pidbuf)); 
+	(void)snprintf(pidbuf,sizeof(pidbuf), "%ld\n",(long)getpid());
+	if (write(fd, pidbuf, strlen(pidbuf)) < 0) {
+		syslog(LOG_ERR, "write: %m");
+		exit(1);
+	}
+
+	/* Ignore SIGHUP and SIGTERM */
+	sa.sa_handler = SIG_IGN;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+	if (sigaction(SIGHUP, &sa, NULL) < 0) {
+		syslog(LOG_ERR, "sigaction SIGHUP: %m");
+		exit(1);
+	}
+
+	if (sigaction(SIGTERM, &sa, NULL) < 0) {
+		syslog(LOG_ERR, "sigaction SIGTERM: %m");
+		exit(1);
+	}
+
+
+	/* Done with daemonizing */
+	syslog(LOG_INFO, "Running in the background\n");
+
+	if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+		syslog(LOG_ERR, "socket: %m");
+		exit(1);
+	}
+
 	memset(&srv_addr, 0, sizeof(srv_addr));
 	memset(&cli_addr, 0, sizeof(cli_addr));
 
-	/* setup the server address struct */
 	srv_addr.sin_family = AF_INET;
 	srv_addr.sin_addr.s_addr = INADDR_ANY;
 	srv_addr.sin_port = htons(port);
 
-	/* bind the port */
-	if (bind(fd, (struct sockaddr *)&srv_addr, sizeof(srv_addr)) < 0)
-		err(1, (char *)NULL);
+	if (bind(sock, (struct sockaddr *)&srv_addr, sizeof(srv_addr)) < 0) {
+		syslog(LOG_ERR, "bind: %m");
+		exit(1);
+	}
 
-	/*
-	 * willingness to accept incoming connections and backlog queue
-	 * length
-	 */
-	if (listen(fd, QLEN) < 0)
-		err(1,(char *)NULL);	
+	if (listen(sock, QLEN) < 0) {
+		syslog(LOG_ERR, "listen: %m");
+		exit(1);
+	}
 
-	/* listen forever */
 	while (1) {
 		addr_len = sizeof(cli_addr);
 
 		/* accept incoming connections - this call is blocking */
-		if ((newfd = accept(fd, (struct sockaddr *)&cli_addr, 
-		    &addr_len)) < 0)
-			err(1,(char *)NULL);	
+		if ((newsock = accept(sock, (struct sockaddr *)&cli_addr, 
+		    &addr_len)) < 0) {
+			syslog(LOG_ERR, "accept: %m");
+			exit(1);
+		}
+
+		d.fd = newsock;
+		d.dbcred = cred;
 
 		/*
-		 * We have a connection from the client at this point.
-		 * fork() a new process to handle the request.
+		 * We have a connection from a client at this point.
+		 * Create a new thread to handle the request.
 		 */
-		pid = fork();
-		if (pid == 0) {
-			/* child process - handle the client request */
-
-			/* clear the receive buffer */
-			memset(buf, 0, BUFLEN);
-
-			/* read the client request */
-			if ((recv_bytes = read(newfd, buf, BUFLEN - 1)) < 0)
-				err(1, (char *)NULL);
-
-			/* send data to the client */
-			send_http_headers(newfd);
-			if(get_http_values(buf, namval, NAMVALLEN) == 0){
-				for (i=0; i< NAMVALLEN; i++) {
-					if (namval[i].name == 'q') {
-						execute_sql(namval[i].value, 
-						    newfd, &cred, send);
-					}
-				}
-			}
-
-			if (shutdown(newfd, SHUT_RDWR) < 0)
-				err(1, (char *)NULL);
-
-			if (close(newfd) < 0)
-				err(1, (char *)NULL);
-		} else if (pid > 0) {
-			/* parent process - keep listening */
-			continue;
-		} else {
-			/* error */
-			if (close(fd) < 0)
-				err(1, (char *)NULL);
+		if (pthread_create(&t_id, NULL, worker, (void *)&d) < 0) { 
+			syslog(LOG_ERR, "Could not create the new thread!");
+			exit(1);
 		}
 	}
 
-	/* not reached */
-	if (close(fd) < 0)
+	closelog();
+
+	if (close(sock) < 0)
 		err(1, (char *)NULL);
 	return 0;
 }
-
-
