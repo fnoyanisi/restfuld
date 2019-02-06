@@ -58,6 +58,10 @@
 
 #define NAMVALLEN 2
 
+#define LOCKFILE "/var/run/restfuld.pid"
+#define LOCKMODE (S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH)
+#define LOGPATH "/var/log/" 
+
 struct thread_data {
 	int fd;
 	struct mysql_db_cred dbcred;
@@ -246,8 +250,6 @@ main(int argc, char **argv)
 	struct mysql_db_cred cred;
 	struct sigaction sa;
 
-	(void)openlog("restfuld", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_DAEMON);
-
 	/* set the defaults */
 	port = PORTNO;
 
@@ -257,10 +259,10 @@ main(int argc, char **argv)
 	(void)strlcpy(cred.username, DBNAME, DBNAME_LEN);
 	(void)strlcpy(cred.table, DBTABLE, DBTABLE_LEN);
 
-	(void)strlcpy(logpath, "./restfuld.log", PATH_MAX);
-	
+	(void)strlcpy(logpath, LOGPATH"restfuld.log", PATH_MAX);
 	(void)strlcpy(cfgpath, "./restfuld.conf", PATH_MAX);
 
+	/* command line arguments */
 	cflag = Dflag = Hflag = lflag = pflag = Pflag = Tflag = Uflag = 0;
 	while ((ch = getopt(argc, argv, "c:D:H:l:p:P:T:U:")) != -1) {
 		switch(ch) {
@@ -314,22 +316,49 @@ main(int argc, char **argv)
 	argv += optind;
 
 	/* daemonize */
+	
+	/* clear the file creation mask */
+	umask(0);
+
 	pid = fork();
 	if (pid < 0) {
 		/* error */
-		syslog(LOG_ERR, "fork: %m");
 		fprintf(stderr,"restfuld: Cannot create background process.\n");
 		exit(1);
 	}
 
 	/* parent */
-	if (pid > 0) {	
+	if (pid > 0) {
+		printf("restfuld started with PID %d.\n", pid);	
 		exit(0);
 	}
 
 	/* child */
 	if (setsid() < 0) {
-		syslog(LOG_ERR, "setsid: %m");
+		perror("setsid");
+		exit(1);
+	}
+
+	/* Ignore SIGHUP and SIGTERM */
+	sa.sa_handler = SIG_IGN;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+#ifdef SA_INTERRUPT
+	sa.sa_flags |= SA_INTERRUPT;
+#endif
+	if (sigaction(SIGHUP, &sa, NULL) < 0) {
+		perror("sigaction SIGHUP");
+		exit(1);
+	}
+
+	if (sigaction(SIGTERM, &sa, NULL) < 0) {
+		perror("sigaction SIGTERM");
+		exit(1);
+	}
+
+	/* change the working directory for the daemon */
+	if (chdir("/") < 0) {
+		perror("chdir");
 		exit(1);
 	}
 
@@ -341,7 +370,7 @@ main(int argc, char **argv)
 		(void)close(fd);
 
 	if ((fd = open("/dev/null", O_RDWR)) < 0) {
-		syslog(LOG_ERR, "open /dev/null : %m");
+		perror("open /dev/null");
 		exit(1);
 	}
 
@@ -349,55 +378,36 @@ main(int argc, char **argv)
 	dup2(fd, STDOUT_FILENO);
 	dup2(fd, STDERR_FILENO);
 
-	/* clear the file creation mask */
-	umask(0);
+	/* Initialize the log file */
+	openlog("restfuld", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_DAEMON);
+	syslog(LOG_INFO, "restfuld started.\n");
 
-	/* change the running directory for the daemon */
-	if (chdir("/") < 0) {
-		syslog(LOG_ERR, "chdir: %m");
-		exit(1);
-	}
+	/* Done with daemonizing */
 
-	/* 
-	 * Make sure only one instance of restfuld is running
-	 * at any time.
-	 * Use of /var/run may be operating system dependent.
-	 * In FreeBSD, see hier(7) manual page for details
-	 */
-	if ((fd = open("/var/run/restfuld.pid", O_RDWR | O_CREAT, 0133)) < 0) {
-		syslog(LOG_ERR, "open /var/run/restfuld.pid : %m");
+	/* Make sure only one instance of restfuld is running */
+	if ((fd = open(LOCKFILE, O_RDWR | O_CREAT, LOCKMODE)) < 0) {
+		syslog(LOG_ERR,"cannot open %s: %s", LOCKFILE, strerror(errno));
 		exit(1);
 	}
 
 	if (lockf(fd, F_TLOCK, 0) < 0) {
+		if (errno == EACCES || errno == EAGAIN) {
+			syslog(LOG_ERR,"another instance is already running.");
+			close(fd);
+			exit(1);
+		}
 		syslog(LOG_ERR, "flock: %m");
 		exit(1);
 	}
 
+	ftruncate(fd, 0);
 	memset(pidbuf, 0, sizeof(pidbuf)); 
-	(void)snprintf(pidbuf,sizeof(pidbuf), "%ld\n",(long)getpid());
-	if (write(fd, pidbuf, strlen(pidbuf)) < 0) {
-		syslog(LOG_ERR, "write: %m");
+	(void)snprintf(pidbuf,sizeof(pidbuf), "%ld",(long)getpid());
+	if (write(fd, pidbuf, strlen(pidbuf)+1) < 0) {
+		syslog(LOG_ERR,"cannot write %s: %s", 
+		    LOCKFILE, strerror(errno));
 		exit(1);
 	}
-
-	/* Ignore SIGHUP and SIGTERM */
-	sa.sa_handler = SIG_IGN;
-	sigemptyset(&sa.sa_mask);
-	sa.sa_flags = 0;
-	if (sigaction(SIGHUP, &sa, NULL) < 0) {
-		syslog(LOG_ERR, "sigaction SIGHUP: %m");
-		exit(1);
-	}
-
-	if (sigaction(SIGTERM, &sa, NULL) < 0) {
-		syslog(LOG_ERR, "sigaction SIGTERM: %m");
-		exit(1);
-	}
-
-
-	/* Done with daemonizing */
-	syslog(LOG_INFO, "Running in the background\n");
 
 	if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
 		syslog(LOG_ERR, "socket: %m");
@@ -421,7 +431,7 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
-	while (1) {
+	for(;;) {
 		addr_len = sizeof(cli_addr);
 
 		/* accept incoming connections - this call is blocking */
@@ -439,14 +449,18 @@ main(int argc, char **argv)
 		 * Create a new thread to handle the request.
 		 */
 		if (pthread_create(&t_id, NULL, worker, (void *)&d) < 0) { 
-			syslog(LOG_ERR, "Could not create the new thread!");
+			syslog(LOG_ERR, "could not create the new thread!");
 			exit(1);
 		}
 	}
 
+	if (close(sock) < 0) {
+		syslog(LOG_ERR,"close: %m");
+		closelog();
+		exit(1);
+	}
+	
 	closelog();
-
-	if (close(sock) < 0)
-		err(1, (char *)NULL);
+	
 	return 0;
 }
